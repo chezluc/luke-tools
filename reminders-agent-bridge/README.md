@@ -54,14 +54,27 @@ your grocery list to the terminal.
 Either way the bridge only ever *writes* the `agent.received:` and
 `response.agent:` tags, and it never re-sends those.
 
-The pasted text includes a short footer instructing the agent to mark the
+The delivered text includes a short footer instructing the agent to mark the
 reminder completed and post a timestamped `response.agent:` reply.
+
+### Two ways to deliver into the terminal (`DELIVERY`)
+
+**`DELIVERY = "tmux"` (recommended).** Sends the text directly into a tmux pane
+with `tmux send-keys`, then Enter. Deterministic — it doesn't fight for window
+focus or the clipboard and always targets the right pane. Run your CLI agent
+inside tmux and set `TMUX_TARGET` to its `session:window.pane` (e.g. `agent:0.0`).
+No Accessibility permission needed.
+
+**`DELIVERY = "applescript"`.** Sets the clipboard, activates `TARGET_APP`, and
+sends ⌘V + Return into whatever window is frontmost. Requires Accessibility
+permission and is sensitive to which window is in front.
 
 ## Setup
 
-1. **Accessibility permission** (required): System Settings → Privacy & Security
-   → Accessibility → enable your terminal app. Without it, the synthetic ⌘V does
-   nothing (the AppleScript still reports success).
+1. **Pick a delivery method** (above). For `tmux`, start your agent in a tmux
+   session and set `TMUX_TARGET`. For `applescript`, grant **Accessibility**
+   permission: System Settings → Privacy & Security → Accessibility → enable
+   your terminal app (without it the synthetic ⌘V silently does nothing).
 2. That's it — it reads/writes the default **Reminders** list.
 
 ## Run
@@ -82,10 +95,12 @@ or double-click **`Start Bridge.command`**. Stop with Ctrl-C.
 
 | Constant          | Default            | Purpose                                       |
 |-------------------|--------------------|-----------------------------------------------|
+| `DELIVERY`        | `"tmux"`           | `"tmux"` (send-keys) or `"applescript"` (paste) |
+| `TMUX_TARGET`     | `"agent:0.0"`      | tmux `session:window.pane` (tmux delivery)    |
+| `TARGET_APP`      | `"Terminal"`       | app to paste into (applescript delivery)      |
 | `REQUIRE_PREFIX`  | `True`             | `True` = need `incoming.agent:`; `False` = any reminder |
 | `MATCH_PREFIX`    | `"incoming.agent:"`| inbound prefix (prefix mode)                  |
 | `INBOX_LIST`      | `"Reminders"`      | which Reminders list to watch                 |
-| `TARGET_APP`      | `"Terminal"`       | which app to paste into (e.g. `"iTerm"`)      |
 | `POLL_SECONDS`    | `1`                | how often to check Reminders                  |
 | `DONE_PREFIX`     | `"agent.received:"`| delivered tag (won't resend)                  |
 | `RESPONSE_PREFIX` | `"response.agent:"`| reply tag (ignored as incoming)               |

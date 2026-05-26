@@ -4,10 +4,21 @@ Reminders -> Terminal bridge (the "in" direction).
 
 Polls macOS Reminders every second, finds a new incoming message, and:
   1. tags the reminder "agent.received:" so it isn't sent twice
-  2. activates the target terminal app
-  3. pastes the message into it via clipboard + Cmd+V, then presses Return
+  2. delivers the message to a terminal running a CLI agent (e.g. Claude Code)
 
-Two modes (set REQUIRE_PREFIX below):
+Delivery (set DELIVERY below):
+
+  DELIVERY = "tmux"        (recommended)
+      Sends the text straight into a tmux pane with `tmux send-keys`, then
+      Enter. Deterministic -- doesn't depend on window focus or the clipboard,
+      and targets a specific pane. Set TMUX_TARGET to "session:window.pane".
+
+  DELIVERY = "applescript"
+      Activates TARGET_APP, sets the clipboard, and sends Cmd+V + Return into
+      whatever window is frontmost. Requires Accessibility permission for the
+      terminal app.
+
+Two incoming modes (set REQUIRE_PREFIX below):
 
   REQUIRE_PREFIX = True  (default, safe)
       A message is any reminder whose title starts with "incoming.agent:".
@@ -38,8 +49,12 @@ MATCH_PREFIX = "incoming.agent:"   # the incoming prefix (used when REQUIRE_PREF
 DONE_PREFIX = "agent.received:"    # bridge tags delivered messages with this
 RESPONSE_PREFIX = "response.agent:"  # the agent's own replies -- never re-send
 INBOX_LIST = "Reminders"           # which Reminders list to watch
-TARGET_APP = "Terminal"            # which app to paste into (e.g. "iTerm")
 POLL_SECONDS = 1
+
+# Delivery method (see module docstring):
+DELIVERY = "tmux"                  # "tmux" (recommended) or "applescript"
+TMUX_TARGET = "agent:0.0"          # tmux "session:window.pane" to send into
+TARGET_APP = "Terminal"            # applescript mode: app to paste into (e.g. "iTerm")
 
 
 def build_paste_text(message: str) -> str:
@@ -144,18 +159,47 @@ def paste_into_terminal(message: str) -> bool:
     return True
 
 
+def send_via_tmux(message: str) -> bool:
+    """Send the message straight into a tmux pane, then Enter (twice -- CLI
+    agents sometimes drop the first). Uses send-keys -l so the text is treated
+    literally, never as tmux key names."""
+    try:
+        subprocess.run(
+            ["tmux", "send-keys", "-t", TMUX_TARGET, "-l", message],
+            capture_output=True, text=True, timeout=30, check=True,
+        )
+        time.sleep(0.2)
+        subprocess.run(["tmux", "send-keys", "-t", TMUX_TARGET, "Enter"],
+                       capture_output=True, text=True, timeout=10)
+        time.sleep(0.2)
+        subprocess.run(["tmux", "send-keys", "-t", TMUX_TARGET, "Enter"],
+                       capture_output=True, text=True, timeout=10)
+        return True
+    except subprocess.CalledProcessError as e:
+        log(f"tmux send error: {e.stderr.strip() if e.stderr else e}")
+        return False
+
+
+def deliver(message: str) -> bool:
+    """Dispatch to the configured delivery method."""
+    if DELIVERY == "tmux":
+        return send_via_tmux(message)
+    return paste_into_terminal(message)
+
+
 def main() -> None:
     mode = f"prefix {MATCH_PREFIX!r}" if REQUIRE_PREFIX else "any new reminder (no prefix)"
-    log(f"Bridge live: {INBOX_LIST!r} list [{mode}] -> {TARGET_APP} "
+    dest = f"tmux {TMUX_TARGET}" if DELIVERY == "tmux" else f"{TARGET_APP} (paste)"
+    log(f"Bridge live: {INBOX_LIST!r} list [{mode}] -> {dest} "
         f"(poll {POLL_SECONDS}s). Ctrl-C to stop.")
     while True:
         try:
             msg = pull_next_message()
             if msg:
                 log(f"INCOMING: {msg}")
-                if paste_into_terminal(build_paste_text(msg)):
-                    log(f"-> pasted into {TARGET_APP} + Return (with protocol)")
-                # small gap so we don't paste two messages on top of each other
+                if deliver(build_paste_text(msg)):
+                    log(f"-> delivered via {DELIVERY} (with protocol)")
+                # small gap so we don't send two messages on top of each other
                 time.sleep(0.5)
         except subprocess.TimeoutExpired:
             log("step timed out, retrying")
