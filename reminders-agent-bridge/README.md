@@ -23,18 +23,36 @@ stdlib.
 
 ## How it works
 
-The bridge uses three title prefixes on reminders in the main **Reminders** list:
+The bridge uses title prefixes on reminders in the watched list:
 
 | Prefix              | Written by        | Meaning                                   |
 |---------------------|-------------------|-------------------------------------------|
-| `incoming.agent:`   | reader/voice agent| inbound message for the CLI agent         |
+| `incoming.agent:`   | reader/voice agent| inbound message (prefix mode only)        |
 | `agent.received:`   | the bridge        | acknowledged + delivered (won't resend)   |
 | `response.agent:`   | the CLI agent     | reply, prefixed with `[YYYY-MM-DD HH:MM]`  |
 
-`agent_inbox.py` polls every second, and on each `incoming.agent:` reminder it:
-1. renames the prefix to `agent.received:` (so it's delivered exactly once), then
+`agent_inbox.py` polls every second, finds the next incoming message, then:
+1. tags the reminder `agent.received:` (so it's delivered exactly once), and
 2. sets the clipboard to the message, activates the target terminal app, and
    sends ⌘V + Return — pasting the message into the front terminal window.
+
+### Two ways to mark a reminder as "incoming" (`REQUIRE_PREFIX`)
+
+There's one config toggle at the top of `agent_inbox.py`:
+
+**Option 1 — Prefix mode (default, `REQUIRE_PREFIX = True`)**
+A message is any reminder titled `incoming.agent: <message>`. Use this if you
+**also use Reminders for normal to-dos** — only tagged reminders get picked up,
+everything else is ignored.
+
+**Option 2 — No-prefix mode (`REQUIRE_PREFIX = False`)**
+A message is **any** new reminder in the watched list (anything the bridge
+didn't tag itself). Just type or speak the message — no prefix to remember. Use
+this only if you **dedicate the list to the bridge**, otherwise it will send
+your grocery list to the terminal.
+
+Either way the bridge only ever *writes* the `agent.received:` and
+`response.agent:` tags, and it never re-sends those.
 
 The pasted text includes a short footer instructing the agent to mark the
 reminder completed and post a timestamped `response.agent:` reply.
@@ -62,12 +80,15 @@ or double-click **`Start Bridge.command`**. Stop with Ctrl-C.
 
 ## Configuration (top of `agent_inbox.py`)
 
-| Constant        | Default            | Purpose                                  |
-|-----------------|--------------------|------------------------------------------|
-| `TARGET_APP`    | `"Terminal"`       | which app to paste into (e.g. `"iTerm"`) |
-| `POLL_SECONDS`  | `1`                | how often to check Reminders             |
-| `MATCH_PREFIX`  | `"incoming.agent:"`| inbound prefix                           |
-| `DONE_PREFIX`   | `"agent.received:"`| delivered prefix                         |
+| Constant          | Default            | Purpose                                       |
+|-------------------|--------------------|-----------------------------------------------|
+| `REQUIRE_PREFIX`  | `True`             | `True` = need `incoming.agent:`; `False` = any reminder |
+| `MATCH_PREFIX`    | `"incoming.agent:"`| inbound prefix (prefix mode)                  |
+| `INBOX_LIST`      | `"Reminders"`      | which Reminders list to watch                 |
+| `TARGET_APP`      | `"Terminal"`       | which app to paste into (e.g. `"iTerm"`)      |
+| `POLL_SECONDS`    | `1`                | how often to check Reminders                  |
+| `DONE_PREFIX`     | `"agent.received:"`| delivered tag (won't resend)                  |
+| `RESPONSE_PREFIX` | `"response.agent:"`| reply tag (ignored as incoming)               |
 
 ## Files
 

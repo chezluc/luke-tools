@@ -2,16 +2,26 @@
 """
 Reminders -> Terminal bridge (the "in" direction).
 
-Polls macOS Reminders every second. For each incomplete reminder whose title
-starts with "incoming.agent:", it:
-  1. activates the target terminal app
-  2. pastes the message into it via clipboard + Cmd+V, then presses Return
-  3. renames the reminder prefix to "agent.received:" so it isn't sent twice
+Polls macOS Reminders every second, finds a new incoming message, and:
+  1. tags the reminder "agent.received:" so it isn't sent twice
+  2. activates the target terminal app
+  3. pastes the message into it via clipboard + Cmd+V, then presses Return
+
+Two modes (set REQUIRE_PREFIX below):
+
+  REQUIRE_PREFIX = True  (default, safe)
+      A message is any reminder whose title starts with "incoming.agent:".
+      Use this if you also use Reminders for normal to-dos -- only tagged
+      reminders are picked up.
+
+  REQUIRE_PREFIX = False (no prefix)
+      A message is ANY new reminder in INBOX_LIST that the bridge didn't tag
+      itself. Just type/speak the message -- no prefix to remember. Use this
+      only if you dedicate the list to the bridge.
 
 The terminal is assumed to be running a CLI agent (e.g. Claude Code). The agent
-replies "out" by writing a "response.agent:" reminder into the main Reminders
-list (one-line AppleScript, or the included reply.sh), which a human or voice
-agent reads back.
+replies "out" by writing a "response.agent:" reminder into the list (one-line
+AppleScript, or the included reply.sh), which a human or voice agent reads back.
 
 Run:   python3 agent_inbox.py
 Stop:  Ctrl-C
@@ -22,9 +32,13 @@ import time
 import sys
 from datetime import datetime
 
-MATCH_PREFIX = "incoming.agent:"
-DONE_PREFIX = "agent.received:"
-TARGET_APP = "Terminal"
+# --- config ----------------------------------------------------------------
+REQUIRE_PREFIX = True              # True = need "incoming.agent:"; False = any reminder
+MATCH_PREFIX = "incoming.agent:"   # the incoming prefix (used when REQUIRE_PREFIX)
+DONE_PREFIX = "agent.received:"    # bridge tags delivered messages with this
+RESPONSE_PREFIX = "response.agent:"  # the agent's own replies -- never re-send
+INBOX_LIST = "Reminders"           # which Reminders list to watch
+TARGET_APP = "Terminal"            # which app to paste into (e.g. "iTerm")
 POLL_SECONDS = 1
 
 
@@ -43,28 +57,46 @@ def build_paste_text(message: str) -> str:
     )
 
 
-# --- Step 1: pull the next unsent message and mark it received -------------
-# Scans all lists. Returns the message text (after the prefix), or "" if none.
-# Renames the reminder in place so it won't be picked up again.
-PULL_SCRIPT = f'''
-on stripPrefix(theName, thePrefix)
-    return text ((count of thePrefix) + 1) thru -1 of theName
-end stripPrefix
+# --- Step 1: build the AppleScript that pulls the next unsent message -------
+# Returns the message text and tags the reminder so it won't be picked up again.
+def _build_pull_script() -> str:
+    if REQUIRE_PREFIX:
+        # Watch INBOX_LIST for titles starting with MATCH_PREFIX; strip the
+        # prefix from the returned text and re-tag with DONE_PREFIX.
+        return f'''
+        on stripPrefix(theName, thePrefix)
+            return text ((count of thePrefix) + 1) thru -1 of theName
+        end stripPrefix
 
-tell application "Reminders"
-    repeat with l in lists
-        set hits to (every reminder in l whose completed is false and name starts with "{MATCH_PREFIX}")
-        if (count of hits) > 0 then
-            set r to item 1 of hits
-            set oldName to name of r
-            set msg to my stripPrefix(oldName, "{MATCH_PREFIX}")
-            set name of r to "{DONE_PREFIX}" & msg
-            return msg
-        end if
-    end repeat
-    return ""
-end tell
-'''
+        tell application "Reminders"
+            set theList to list "{INBOX_LIST}"
+            repeat with r in (every reminder in theList whose completed is false and name starts with "{MATCH_PREFIX}")
+                set oldName to name of r
+                set msg to my stripPrefix(oldName, "{MATCH_PREFIX}")
+                set name of r to "{DONE_PREFIX} " & msg
+                return msg
+            end repeat
+            return ""
+        end tell
+        '''
+    # No-prefix mode: a message is any reminder in INBOX_LIST that isn't already
+    # one of the bridge's own tagged items (agent.received: / response.agent:).
+    return f'''
+    tell application "Reminders"
+        set theList to list "{INBOX_LIST}"
+        repeat with r in (every reminder in theList whose completed is false)
+            set nm to name of r
+            if (nm does not start with "{DONE_PREFIX}") and (nm does not start with "{RESPONSE_PREFIX}") then
+                set name of r to "{DONE_PREFIX} " & nm
+                return nm
+            end if
+        end repeat
+        return ""
+    end tell
+    '''
+
+
+PULL_SCRIPT = _build_pull_script()
 
 
 def paste_script(message: str) -> str:
@@ -113,7 +145,8 @@ def paste_into_terminal(message: str) -> bool:
 
 
 def main() -> None:
-    log(f"Bridge live: Reminders {MATCH_PREFIX!r} -> {TARGET_APP} "
+    mode = f"prefix {MATCH_PREFIX!r}" if REQUIRE_PREFIX else "any new reminder (no prefix)"
+    log(f"Bridge live: {INBOX_LIST!r} list [{mode}] -> {TARGET_APP} "
         f"(poll {POLL_SECONDS}s). Ctrl-C to stop.")
     while True:
         try:
